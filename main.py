@@ -43,24 +43,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Additional battery storage capacity in kWh for the analysis.",
     )
-    parser.add_argument(
-        "--latitude",
-        type=float,
-        default=52.52,
-        help="Latitude for sunrise/sunset calculation.",
-    )
-    parser.add_argument(
-        "--longitude",
-        type=float,
-        default=10.45,
-        help="Longitude for sunrise/sunset calculation.",
-    )
-    parser.add_argument(
-        "--timezone",
-        type=str,
-        default="Europe/Berlin",
-        help="Timezone for sunrise/sunset calculation.",
-    )
     return parser.parse_args()
 
 
@@ -71,9 +53,6 @@ def main() -> None:
     analysis = analyze_battery_extension_potential(
         df,
         additional_storage_capacity_kwh=args.storage_capacity,
-        latitude=args.latitude,
-        longitude=args.longitude,
-        timezone=args.timezone,
     )
     summary = summarize_extension_potential(analysis)
 
@@ -84,14 +63,11 @@ def main() -> None:
         print("  Additional storage capacity: unlimited")
     print(f"  Total day generation: {summary['total_day_generation_kwh']:.2f} kWh")
     print(f"  Total day export: {summary['total_day_export_kwh']:.2f} kWh")
-    print(f"  Total energy stored (limited): {summary['total_energy_stored_kwh']:.2f} kWh")
-    print(f"  Total energy stored (unlimited): {summary['total_energy_stored_unlimited_kwh']:.2f} kWh")
-    print(f"  Total spilled day export: {summary['total_spilled_day_export_kwh']:.2f} kWh")
-    print(f"  Total night grid demand: {summary['total_night_grid_kwh']:.2f} kWh")
-    print(f"  Total unserved night demand: {summary['total_unserved_night_kwh']:.2f} kWh")
-    print(f"  Potential coverage with specified size: {summary['total_potential_coverage_kwh']:.2f} kWh")
+    print(f"  Total day import: {summary['total_day_import_kwh']:.2f} kWh")
+    print(f"  Total unserved import: {summary['total_unserved_import_kwh']:.2f} kWh")
+    print(f"  Potential coverage with specified size: {summary['total_potential_coverage_limited_kwh']:.2f} kWh")
     print(f"  Potential coverage unlimited: {summary['total_potential_coverage_unlimited_kwh']:.2f} kWh")
-    print(f"  Coverage ratio (limited): {summary['coverage_ratio']:.2%}")
+    print(f"  Coverage ratio (limited): {summary['coverage_ratio_limited']:.2%}")
     print(f"  Coverage ratio (unlimited): {summary['coverage_ratio_unlimited']:.2%}")
 
     plot_power_chart(
