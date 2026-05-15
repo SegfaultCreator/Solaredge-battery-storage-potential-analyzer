@@ -97,10 +97,8 @@ def analyze_battery_extension_potential(
         day_export_total = (day_data[export_column] * duration_hours).sum()
         day_import_total = (day_data[grid_import_column] * duration_hours).sum()
 
-        # Track battery state before processing this day
-        charge_before_limited = battery_limited.charge_kwh
-        charge_before_unlimited = battery_unlimited.charge_kwh
-
+        stored_this_day_limited = 0.0
+        stored_this_day_unlimited = 0.0
         covered_limited = 0.0
         covered_unlimited = 0.0
 
@@ -110,16 +108,12 @@ def analyze_battery_extension_potential(
             import_kwh = row[grid_import_column] * duration_hours
 
             # Store excess export
-            battery_limited.store(export_kwh)
-            battery_unlimited.store(export_kwh)
+            stored_this_day_limited += battery_limited.store(export_kwh)
+            stored_this_day_unlimited += battery_unlimited.store(export_kwh)
 
             # Discharge for grid import
             covered_limited += battery_limited.discharge(import_kwh)
             covered_unlimited += battery_unlimited.discharge(import_kwh)
-
-        # Track changes for this day
-        stored_this_day_limited = battery_limited.charge_kwh - charge_before_limited
-        stored_this_day_unlimited = battery_unlimited.charge_kwh - charge_before_unlimited
 
         analysis.append(
             {
@@ -127,12 +121,12 @@ def analyze_battery_extension_potential(
                 "day_generation_kwh": float(day_generation),
                 "day_export_kwh": float(day_export_total),
                 "day_import_kwh": float(day_import_total),
-                "energy_stored_this_day_limited_kwh": float(stored_this_day_limited),
-                "energy_stored_this_day_unlimited_kwh": float(stored_this_day_unlimited),
+                "charged_to_battery_limited_kwh": float(stored_this_day_limited),
+                "charged_to_battery_unlimited_kwh": float(stored_this_day_unlimited),
                 "energy_stored_cumulative_limited_kwh": float(battery_limited.charge_kwh),
                 "energy_stored_cumulative_unlimited_kwh": float(battery_unlimited.charge_kwh),
-                "potential_coverage_this_day_limited_kwh": float(covered_limited),
-                "potential_coverage_this_day_unlimited_kwh": float(covered_unlimited),
+                "provided_from_battery_limited_kwh": float(covered_limited),
+                "provided_from_battery_unlimited_kwh": float(covered_unlimited),
                 "unserved_import_this_day_kwh": float(max(0.0, day_import_total - covered_limited)),
             }
         )
@@ -146,25 +140,25 @@ def summarize_extension_potential(analysis_df: pd.DataFrame) -> dict[str, float]
     total_generation = float(analysis_df["day_generation_kwh"].sum())
     total_export = float(analysis_df["day_export_kwh"].sum())
     total_import = float(analysis_df["day_import_kwh"].sum())
-    total_stored_this_day_limited = float(analysis_df["energy_stored_this_day_limited_kwh"].sum())
-    total_stored_this_day_unlimited = float(analysis_df["energy_stored_this_day_unlimited_kwh"].sum())
+    total_charged_to_battery_limited = float(analysis_df["charged_to_battery_limited_kwh"].sum())
+    total_charged_to_battery_unlimited = float(analysis_df["charged_to_battery_unlimited_kwh"].sum())
     total_stored_cumulative_limited = float(analysis_df["energy_stored_cumulative_limited_kwh"].iloc[-1] if not analysis_df.empty else 0.0)
     total_stored_cumulative_unlimited = float(analysis_df["energy_stored_cumulative_unlimited_kwh"].iloc[-1] if not analysis_df.empty else 0.0)
-    total_covered_limited = float(analysis_df["potential_coverage_this_day_limited_kwh"].sum())
-    total_covered_unlimited = float(analysis_df["potential_coverage_this_day_unlimited_kwh"].sum())
+    total_provided_from_battery_limited = float(analysis_df["provided_from_battery_limited_kwh"].sum())
+    total_provided_from_battery_unlimited = float(analysis_df["provided_from_battery_unlimited_kwh"].sum())
     total_unserved = float(analysis_df["unserved_import_this_day_kwh"].sum())
 
     return {
         "total_day_generation_kwh": total_generation,
         "total_day_export_kwh": total_export,
         "total_day_import_kwh": total_import,
-        "total_energy_stored_this_day_limited_kwh": total_stored_this_day_limited,
-        "total_energy_stored_this_day_unlimited_kwh": total_stored_this_day_unlimited,
+        "total_charged_to_battery_limited_kwh": total_charged_to_battery_limited,
+        "total_charged_to_battery_unlimited_kwh": total_charged_to_battery_unlimited,
         "final_energy_stored_limited_kwh": total_stored_cumulative_limited,
         "final_energy_stored_unlimited_kwh": total_stored_cumulative_unlimited,
-        "total_potential_coverage_limited_kwh": total_covered_limited,
-        "total_potential_coverage_unlimited_kwh": total_covered_unlimited,
+        "total_provided_from_battery_limited_kwh": total_provided_from_battery_limited,
+        "total_provided_from_battery_unlimited_kwh": total_provided_from_battery_unlimited,
         "total_unserved_import_kwh": total_unserved,
-        "coverage_ratio_limited": float(total_covered_limited / total_import if total_import else 0.0),
-        "coverage_ratio_unlimited": float(total_covered_unlimited / total_import if total_import else 0.0),
+        "coverage_ratio_limited": float(total_provided_from_battery_limited / total_import if total_import else 0.0),
+        "coverage_ratio_unlimited": float(total_provided_from_battery_unlimited / total_import if total_import else 0.0),
     }
