@@ -21,7 +21,7 @@ def monthly_cache_path(year: int, month: int) -> Path:
 
 def save_monthly_series(df: pd.DataFrame, year: int, month: int) -> Path:
     payload = df.copy()
-    for column in ("timestamp", "consumption", "production", "FeedIn"):
+    for column in ("timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"):
         if column not in payload.columns:
             payload[column] = 0.0
     payload["timestamp"] = pd.to_datetime(payload["timestamp"], errors="coerce")

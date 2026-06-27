@@ -17,7 +17,7 @@ def merge_monthly_cache_files() -> pd.DataFrame:
         frames.append(monthly_frame)
 
     if not frames:
-        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn"])
+        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"])
 
     merged = pd.concat(frames, axis=0, ignore_index=True)
     merged["timestamp"] = pd.to_datetime(merged["timestamp"], errors="coerce")
@@ -44,7 +44,7 @@ def synthesize_target_dataframe(merged: pd.DataFrame) -> pd.DataFrame:
     frame = merged.copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
     frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp")
-    for column in ("consumption", "production", "FeedIn"):
+    for column in ("consumption", "production", "FeedIn", "Purchased", "SelfConsumption"):
         if column not in frame.columns:
             frame[column] = 0.0
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
@@ -58,7 +58,7 @@ def synthesize_target_dataframe(merged: pd.DataFrame) -> pd.DataFrame:
             "Zum Speicher (kW)": 0.0,
             "Verbrauch (kW)": frame["consumption"],
             "Aus PV-Energie (kW)": frame["production"],
-            "Vom Netz (kW)": 0.0,
-            "Vom Speicher (kW)": 0.0,
+            "Vom Netz (kW)": frame.get("Purchased", 0.0),
+            "Vom Speicher (kW)": frame.get("SelfConsumption", 0.0),
         }
     )

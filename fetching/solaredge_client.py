@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -12,8 +12,8 @@ def parse_datetime(value: str | datetime) -> datetime:
         return value
     text = value.strip()
     if len(text) == 10 and "T" not in text and " " not in text:
-        return datetime.fromisoformat(text).replace(hour=0, minute=0, second=0)
-    return datetime.fromisoformat(text.replace(" ", "T"))
+        return datetime.fromisoformat(text).replace(hour=0, minute=0, second=0, tzinfo=timezone.utc)
+    return datetime.fromisoformat(text.replace(" ", "T")).replace(tzinfo=timezone.utc)
 
 
 def coerce_end_datetime(value: str | datetime) -> datetime:
@@ -23,22 +23,31 @@ def coerce_end_datetime(value: str | datetime) -> datetime:
     return dt
 
 
+def format_api_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def month_range(start: datetime, end: datetime):
-    cur = datetime(start.year, start.month, 1)
+    cur = datetime(start.year, start.month, 1, tzinfo=start.tzinfo)
     while cur <= end:
         yield cur.year, cur.month
         if cur.month == 12:
-            cur = datetime(cur.year + 1, 1, 1)
+            cur = datetime(cur.year + 1, 1, 1, tzinfo=start.tzinfo)
         else:
-            cur = datetime(cur.year, cur.month + 1, 1)
+            cur = datetime(cur.year, cur.month + 1, 1, tzinfo=start.tzinfo)
 
 
-def month_start_end(year: int, month: int) -> tuple[datetime, datetime]:
-    start = datetime(year, month, 1, 0, 0, 0)
+def month_start_end(year: int, month: int, tzinfo: timezone | None = None) -> tuple[datetime, datetime]:
+    tz = tzinfo or timezone.utc
+    start = datetime(year, month, 1, 0, 0, 0, tzinfo=tz)
     if month == 12:
-        end = datetime(year + 1, 1, 1, 0, 0, 0) - timedelta(seconds=1)
+        end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=tz) - timedelta(seconds=1)
     else:
-        end = datetime(year, month + 1, 1, 0, 0, 0) - timedelta(seconds=1)
+        end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=tz) - timedelta(seconds=1)
     return start, end
 
 
@@ -46,8 +55,8 @@ def iter_day_ranges(start: datetime, end: datetime):
     current = start.date()
     last = end.date()
     while current <= last:
-        day_start = datetime.combine(current, time(0, 0, 0))
-        day_end = min(datetime.combine(current + timedelta(days=1), time(0, 0, 0)) - timedelta(seconds=1), end)
+        day_start = datetime.combine(current, time(0, 0, 0), tzinfo=start.tzinfo)
+        day_end = min(datetime.combine(current + timedelta(days=1), time(0, 0, 0), tzinfo=start.tzinfo) - timedelta(seconds=1), end)
         yield day_start, day_end
         current += timedelta(days=1)
 
@@ -56,8 +65,8 @@ def fetch_power_details(api_key: str, site_id: str, start: datetime, end: dateti
     base = f"https://monitoringapi.solaredge.com/site/{site_id}"
     params = {
         "api_key": api_key,
-        "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
-        "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "startTime": format_api_datetime(start),
+        "endTime": format_api_datetime(end),
         "timeUnit": "QUARTER_OF_AN_HOUR",
     }
     resp = requests.get(f"{base}/powerDetails", params=params, timeout=60)
@@ -104,10 +113,34 @@ def flatten_power_details_payload(payload: dict[str, Any]) -> pd.DataFrame:
     return frame
 
 
+def _is_daylight_timestamp(timestamp: Any, start_hour: int = 5, end_hour: int = 21) -> bool:
+    if isinstance(timestamp, pd.Timestamp):
+        dt = timestamp.to_pydatetime()
+    else:
+        dt = pd.to_datetime(timestamp, errors="coerce")
+        if pd.isna(dt):
+            return False
+        dt = dt.to_pydatetime()
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    hour = dt.hour
+    return start_hour <= hour < end_hour
+
+
+def _apply_daylight_filter(flat: pd.DataFrame) -> pd.DataFrame:
+    flat = flat.copy()
+    flat["production"] = flat["production"].where(flat["timestamp"].apply(_is_daylight_timestamp), 0.0)
+    return flat
+
+
 def build_monthly_time_series(payload: dict[str, Any]) -> pd.DataFrame:
     flat = flatten_power_details_payload(payload)
     if flat.empty:
-        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn"])
+        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"])
 
     flat = flat.copy()
     flat["value"] = pd.to_numeric(flat["value"], errors="coerce").fillna(0.0) / 1000.0
@@ -116,6 +149,8 @@ def build_monthly_time_series(payload: dict[str, Any]) -> pd.DataFrame:
     flat["consumption"] = 0.0
     flat["production"] = 0.0
     flat["FeedIn"] = 0.0
+    flat["Purchased"] = 0.0
+    flat["SelfConsumption"] = 0.0
 
     flat.loc[flat["meter_type"].str.contains("production", na=False), "production"] = flat["value"]
     flat.loc[flat["meter_type"].str.contains("consumption", na=False), "consumption"] = flat["value"]
@@ -128,14 +163,123 @@ def build_monthly_time_series(payload: dict[str, Any]) -> pd.DataFrame:
         "consumption",
     ] = flat["value"]
 
-    grouped = flat[["timestamp", "consumption", "production", "FeedIn"]].groupby("timestamp", as_index=False).sum()
+    # map purchased and self-consumption where available
+    flat.loc[flat["meter_type"].str.contains("purchased", na=False), "Purchased"] = flat["value"]
+    flat.loc[
+        flat["meter_type"].str.contains("self", na=False) | flat["meter_type"].str.contains("selfconsumption", na=False),
+        "SelfConsumption",
+    ] = flat["value"]
+
+    grouped = flat[["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"]].groupby(
+        "timestamp", as_index=False
+    ).sum()
     grouped = grouped.sort_values("timestamp").reset_index(drop=True)
     return grouped
 
 
 def fetch_monthly_time_series(api_key: str, site_id: str, start: datetime, end: datetime) -> pd.DataFrame:
-    payload = fetch_power_details(api_key, site_id, start, end)
-    return build_monthly_time_series(payload)
+    # Fetch primary powerDetails payload
+    power_payload = fetch_power_details(api_key, site_id, start, end)
+
+    # Attempt to fetch storageData as well; include any discovered timestamp/value pairs
+    storage_payload = {}
+    try:
+        base = f"https://monitoringapi.solaredge.com/site/{site_id}"
+        params = {
+            "api_key": api_key,
+            "startTime": format_api_datetime(start),
+            "endTime": format_api_datetime(end),
+        }
+        resp = requests.get(f"{base}/storageData", params=params, timeout=60)
+        if resp.status_code == 200:
+            try:
+                storage_payload = resp.json()
+            except Exception:
+                storage_payload = {}
+    except Exception:
+        storage_payload = {}
+
+    # Flatten both payloads and merge
+    flat_power = flatten_power_details_payload(power_payload)
+    flat_storage = _flatten_generic_value_lists(storage_payload, default_type="Storage")
+
+    if flat_power.empty and flat_storage.empty:
+        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"])
+
+    combined = pd.concat([flat_power, flat_storage], axis=0, ignore_index=True)
+
+    # Build monthly series from the combined flattened frame
+    return build_monthly_time_series_from_flat(combined)
+
+
+def _flatten_generic_value_lists(payload: Any, default_type: str = "unknown") -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def walk(obj: Any, parent_type: str | None = None):
+        if isinstance(obj, dict):
+            # detect a typed container
+            p_type = obj.get("type") or parent_type
+            for k, v in obj.items():
+                if k == "values" and isinstance(v, list):
+                    for entry in v:
+                        if isinstance(entry, dict) and "date" in entry:
+                            ts = pd.to_datetime(entry.get("date"), errors="coerce")
+                            val = entry.get("value")
+                            if val in (None, ""):
+                                val = pd.NA
+                            else:
+                                val = pd.to_numeric(val, errors="coerce")
+                            rows.append({"timestamp": ts, "meter_type": p_type or default_type, "value": val})
+                else:
+                    walk(v, p_type)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item, parent_type)
+
+    walk(payload, None)
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "meter_type", "value"])
+    frame = pd.DataFrame(rows)
+    frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    return frame
+
+
+def build_monthly_time_series_from_flat(flat: pd.DataFrame) -> pd.DataFrame:
+    if flat.empty:
+        return pd.DataFrame(columns=["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"])
+
+    flat = flat.copy()
+    flat["value"] = pd.to_numeric(flat["value"], errors="coerce").fillna(0.0) / 1000.0
+    flat["meter_type"] = flat["meter_type"].astype(str).str.lower()
+
+    flat["consumption"] = 0.0
+    flat["production"] = 0.0
+    flat["FeedIn"] = 0.0
+    flat["Purchased"] = 0.0
+    flat["SelfConsumption"] = 0.0
+
+    flat.loc[flat["meter_type"].str.contains("production", na=False), "production"] = flat["value"]
+    flat.loc[flat["meter_type"].str.contains("consumption", na=False), "consumption"] = flat["value"]
+    flat.loc[
+        flat["meter_type"].str.contains("feed", na=False) | flat["meter_type"].str.contains("export", na=False),
+        "FeedIn",
+    ] = flat["value"]
+    flat.loc[
+        flat["meter_type"].str.contains("purchased", na=False) | flat["meter_type"].str.contains("grid import", na=False),
+        "consumption",
+    ] = flat["value"]
+
+    flat.loc[flat["meter_type"].str.contains("purchased", na=False), "Purchased"] = flat["value"]
+    flat.loc[
+        flat["meter_type"].str.contains("self", na=False) | flat["meter_type"].str.contains("selfconsumption", na=False),
+        "SelfConsumption",
+    ] = flat["value"]
+
+    grouped = flat[["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"]].groupby(
+        "timestamp", as_index=False
+    ).sum()
+    grouped = grouped.sort_values("timestamp").reset_index(drop=True)
+    return grouped
 
 
 def _iter_meter_value_lists(json_obj: Any):

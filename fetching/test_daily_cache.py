@@ -8,7 +8,13 @@ import pandas as pd
 
 from fetching import data_cache
 from fetching.data_transform import merge_monthly_cache_files, synthesize_target_dataframe
-from fetching.solaredge_client import build_monthly_time_series, flatten_power_details_payload
+from fetching.solaredge_client import (
+    build_monthly_time_series,
+    build_monthly_time_series_from_flat,
+    flatten_power_details_payload,
+    format_api_datetime,
+    parse_datetime,
+)
 
 
 class DailyCacheTests(unittest.TestCase):
@@ -34,6 +40,23 @@ class DailyCacheTests(unittest.TestCase):
         self.assertEqual(df.iloc[0]["meter_type"], "Production")
         self.assertEqual(df.iloc[1]["value"], 200.0)
 
+    def test_parse_datetime_and_format_api_datetime_use_utc(self) -> None:
+        parsed = parse_datetime("2026-06-21")
+        self.assertEqual(parsed.tzinfo, pd.Timestamp("2026-06-21", tz="UTC").tzinfo)
+        self.assertEqual(format_api_datetime(parsed), "2026-06-21 00:00:00")
+
+    def test_nighttime_production_is_zeroed(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"timestamp": "2026-06-21 00:00:00", "meter_type": "Production", "value": 230.0},
+                {"timestamp": "2026-06-21 12:00:00", "meter_type": "Production", "value": 2300.0},
+            ]
+        )
+
+        result = build_monthly_time_series_from_flat(frame)
+        self.assertEqual(float(result.iloc[0]["production"]), 0.0)
+        self.assertEqual(float(result.iloc[1]["production"]), 2.3)
+
     def test_merge_monthly_cache_files_pivots_to_timeseries(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             data_cache.RAW_DIR = Path(tmpdir)
@@ -57,7 +80,7 @@ class DailyCacheTests(unittest.TestCase):
             data_cache.save_monthly_series(second_month, 2026, 2)
 
             merged = merge_monthly_cache_files()
-            self.assertEqual(list(merged.columns), ["timestamp", "consumption", "production", "FeedIn"])
+            self.assertEqual(list(merged.columns), ["timestamp", "consumption", "production", "FeedIn", "Purchased", "SelfConsumption"])
             self.assertEqual(merged.iloc[0]["timestamp"].strftime("%Y-%m-%d %H:%M:%S"), "2026-01-01 00:00:00")
             self.assertEqual(float(merged.iloc[0]["production"]), 2.0)
 

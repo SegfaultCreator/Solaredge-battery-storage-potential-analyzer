@@ -1,7 +1,9 @@
 import requests
 import json
+import os
 
 SITE_ID = "2464985"
+API_KEY = os.environ.get("SOLAREDGE_API_KEY")
 
 BASE = f"https://monitoringapi.solaredge.com/site/{SITE_ID}"
 
@@ -27,8 +29,8 @@ for endpoint in [
 
 from datetime import datetime, timedelta
 
-start = "2026-06-20 00:00:00"
-end = "2026-06-20 23:59:59"
+start = "2026-06-21 00:00:00"
+end = "2026-06-21 23:59:59"
 
 tests = [
     (
@@ -60,6 +62,6 @@ for endpoint, params in tests:
     print(r.status_code)
 
     try:
-        print(json.dumps(r.json(), indent=2)[:5000])
+        print(json.dumps(r.json(), indent=2)[:12000])
     except Exception:
         print(r.text)
