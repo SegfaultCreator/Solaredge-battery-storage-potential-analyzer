@@ -65,8 +65,8 @@ def main() -> None:
     print(f"  Total day export: {summary['total_day_export_kwh']:.2f} kWh")
     print(f"  Total day import: {summary['total_day_import_kwh']:.2f} kWh")
     print(f"  Total unserved import: {summary['total_unserved_import_kwh']:.2f} kWh")
-    print(f"  Potential coverage with specified size: {summary['total_potential_coverage_limited_kwh']:.2f} kWh")
-    print(f"  Potential coverage unlimited: {summary['total_potential_coverage_unlimited_kwh']:.2f} kWh")
+    print(f"  Potential coverage with specified size: {summary['total_provided_from_battery_limited_kwh']:.2f} kWh")
+    print(f"  Potential coverage unlimited: {summary['total_provided_from_battery_unlimited_kwh']:.2f} kWh")
     print(f"  Coverage ratio (limited): {summary['coverage_ratio_limited']:.2%}")
     print(f"  Coverage ratio (unlimited): {summary['coverage_ratio_unlimited']:.2%}")
 
